@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <thread>
 #include <unistd.h>
 
 #include <json/json.h>
@@ -31,6 +32,15 @@ string random_string(size_t length) {
   return str;
 }
 
+void handle_client(int client_socket) {
+  char buffer[1024];
+  int bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
+  if (bytes_read > 0) {
+    send(client_socket, "Hello from server", 17, 0);
+  }
+  close(client_socket);
+}
+
 int main(int argc, char *argv[]) {
   Argparser::Argparser parser(argc, argv);
   parser.setProgramName("Simple RCON");
@@ -45,7 +55,7 @@ int main(int argc, char *argv[]) {
     cout << "Creating configuration file..." << endl;
     ofstream conf("rcon.conf");
     if (!conf.is_open()) {
-      cout << "Failed to create configuration file! strerror: "
+      cerr << "Failed to create configuration file! strerror: "
            << strerror(errno) << endl;
       return 1;
     }
@@ -55,7 +65,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (!parser.getDefined(0)) {
-    cout << "Specify configuration path!" << endl;
+    cerr << "Specify configuration path!" << endl;
     return 1;
   }
 
@@ -63,7 +73,7 @@ int main(int argc, char *argv[]) {
   ifstream conf(path, std::ifstream::binary);
 
   if (!conf.is_open()) {
-    cout << "Failed to open configuration file! strerror: " << strerror(errno)
+    cerr << "Failed to open configuration file! strerror: " << strerror(errno)
          << endl;
     return 1;
   }
@@ -73,11 +83,29 @@ int main(int argc, char *argv[]) {
   Json::Value data;
 
   if (!Json::parseFromStream(readerBuilder, conf, &data, &errs)) {
-    std::cerr << "Error parsing JSON: " << errs << std::endl;
+    cerr << "Error parsing JSON: " << errs << endl;
     return 1;
   }
   conf.close();
-  cout << data["password"] << endl;
+
+  sockaddr_in addr{AF_INET, htons(data["port"].asInt()), INADDR_ANY};
+
+  int server = socket(AF_INET, SOCK_STREAM, 0);
+  if (server < 0) {
+    cerr << "Socket creation error!" << endl;
+    return 1;
+  }
+  int op = 1;
+  setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &op, sizeof(op));
+  if (bind(server, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    cerr << "Bind failed!" << endl;
+    return 1;
+  }
+  listen(server, 10);
+  while (true) {
+    int client_socket = accept(server, nullptr, nullptr);
+    std::thread(handle_client, client_socket).detach();
+  }
 
   return 0;
 }

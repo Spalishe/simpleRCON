@@ -1,2 +1,5 @@
-all:
-	g++ -Iinclude -ljsoncpp -std=c++20 main.cpp -o simpleRCON
+server:
+	g++ -Iinclude -ljsoncpp -std=c++20 server.cpp -o simpleRCON
+
+client:
+	g++ -Iinclude -ljsoncpp -std=c++20 client.cpp -o simpleRCON
