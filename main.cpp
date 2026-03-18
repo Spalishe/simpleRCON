@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 
@@ -188,8 +189,9 @@ void handle_client(int client_socket, string pipepath, string client_ip,
     send_in_chunks(client_socket, byte_history.data(), byte_history.size());
 
     clients.push_back(client_socket);
+    char buffer[1024];
     while (true) {
-      char buffer[1024];
+      memset(buffer, 0, sizeof(buffer));
       int bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
       if (bytes_read > 0) {
         ofstream pipe(pipepath);
@@ -216,12 +218,8 @@ void process_piping() {
     byte_history.push_back(b);
     broadcast_to_clients(&b, 1);
   }
-  cout << "[RCON] Process closed, closing all connections and leaving..."
-       << endl;
-  for (auto &fd : clients) {
-    close(fd);
-  }
-  exit(0);
+  cout << "[RCON] Main process closed, terminating..." << endl;
+  kill(getpid(), SIGKILL);
 }
 
 int main(int argc, char *argv[]) {
