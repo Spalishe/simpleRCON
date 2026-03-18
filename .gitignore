@@ -1,2 +1,4 @@
 ./simpleRCON
 ./rcon.conf
+./simpleRCON_sv
+./simpleRCON_cl
