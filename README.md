@@ -22,4 +22,4 @@ init: Creates basic configuration file
 - JsonCpp
 
 # License:
-This project is licensed under MIT License. See [LICENSE](https://github.com/Spalishe/simpleRCON/LICENSE)
+This project is licensed under MIT License. See [LICENSE](https://github.com/Spalishe/simpleRCON/blob/main/LICENSE)
