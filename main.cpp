@@ -198,7 +198,7 @@ void handle_client(int client_socket, string pipepath, string client_ip,
           pipe.flush();
           pipe.close();
         }
-      } else if (bytes_read < 0) {
+      } else if (bytes_read <= 0) {
         cout << "Client " << client_socket << " disconnected" << endl;
         break;
       }
