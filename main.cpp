@@ -17,12 +17,57 @@
 #include <thread>
 #include <unistd.h>
 
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+
 using namespace std;
 
 std::vector<char> byte_history;
 std::vector<int> clients;
 
 std::mutex data_mutex;
+
+struct IPState {
+  int attempts_left = 5;
+  bool authorized = false;
+  std::chrono::steady_clock::time_point auth_expires;
+};
+
+std::map<std::string, IPState> ip_registry;
+std::map<std::string, std::chrono::steady_clock::time_point> ban_list;
+std::string get_ban_remaining(std::string ip) {
+  if (ban_list.count(ip)) {
+    auto now = std::chrono::steady_clock::now();
+    auto expire = ban_list[ip];
+
+    if (expire > now) {
+      auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire - now)
+                      .count();
+      int mins = diff / 60;
+      int secs = diff % 60;
+      return std::to_string(mins) + "m " + std::to_string(secs) + "s";
+    }
+  }
+  return "0m 0s";
+}
+bool is_banned(std::string ip) {
+  if (ban_list.count(ip)) {
+    if (std::chrono::steady_clock::now() < ban_list[ip]) {
+      return true;
+    } else {
+      ban_list.erase(ip);
+    }
+  }
+  return false;
+}
+
+void ban_ip(std::string ip, int minutes) {
+  ban_list[ip] =
+      std::chrono::steady_clock::now() + std::chrono::minutes(minutes);
+  std::cout << "[BANNED] IP " << ip << " for " << minutes << " min."
+            << std::endl;
+}
 
 string random_string(size_t length) {
   auto randchar = []() -> char {
@@ -35,22 +80,6 @@ string random_string(size_t length) {
   string str(length, 0);
   generate_n(str.begin(), length, randchar);
   return str;
-}
-
-void handle_client(int client_socket) {
-  while (true) {
-    char buffer[1024];
-    int bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
-    if (bytes_read > 0) {
-      send(client_socket, "Hello from server", 17, 0);
-    } else if (bytes_read < 0) {
-      cout << "Client " << client_socket << " disconnected" << endl;
-      break;
-    }
-  }
-  clients.erase(std::remove(clients.begin(), clients.end(), client_socket),
-                clients.end());
-  close(client_socket);
 }
 
 void broadcast_to_clients(void *buffer, ssize_t len) {
@@ -96,6 +125,90 @@ void send_in_chunks(int fd, void *data, size_t total_size) {
   }
 }
 
+void handle_client(int client_socket, string pipepath, string client_ip,
+                   Json::Value data) {
+  bool can_proceed = false;
+  auto &state = ip_registry[client_ip];
+
+  if (data["password"].asString().size() == 0)
+    can_proceed = true;
+
+  if (!can_proceed) {
+    if (state.authorized &&
+        std::chrono::steady_clock::now() < state.auth_expires) {
+      send(client_socket, "Session restored. Welcome!\n", 27, MSG_NOSIGNAL);
+      can_proceed = true;
+    } else {
+      state.authorized = false;
+
+      while (state.attempts_left > 0) {
+        send(client_socket, "Enter Password: ", 16, MSG_NOSIGNAL);
+
+        char pass_buf[256];
+        int bytes = recv(client_socket, pass_buf, sizeof(pass_buf) - 1, 0);
+        if (bytes <= 0) {
+          close(client_socket);
+          return;
+        }
+
+        pass_buf[bytes] = '\0';
+        std::string input(pass_buf);
+        input.erase(std::remove(input.begin(), input.end(), '\n'), input.end());
+        input.erase(std::remove(input.begin(), input.end(), '\r'), input.end());
+
+        if (input == data["password"].asString()) {
+          state.attempts_left = 5;
+          state.authorized = true;
+          state.auth_expires =
+              std::chrono::steady_clock::now() + std::chrono::minutes(15);
+          send(client_socket, "Access Granted!\n", 16, MSG_NOSIGNAL);
+          can_proceed = true;
+          break;
+        } else {
+          state.attempts_left--;
+          std::string msg =
+              "Wrong! Remaining: " + std::to_string(state.attempts_left) + "\n";
+          send(client_socket, msg.c_str(), msg.length(), MSG_NOSIGNAL);
+        }
+      }
+
+      if (!can_proceed) {
+        ban_list[client_ip] =
+            std::chrono::steady_clock::now() + std::chrono::minutes(15);
+        state.attempts_left = 5; // Сброс для будущего входа
+        send(client_socket, "Too many attempts. Banned for 15 min.\n", 38,
+             MSG_NOSIGNAL);
+        close(client_socket);
+        return;
+      }
+    }
+  }
+
+  if (can_proceed) {
+    send_in_chunks(client_socket, byte_history.data(), byte_history.size());
+
+    clients.push_back(client_socket);
+    while (true) {
+      char buffer[1024];
+      int bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
+      if (bytes_read > 0) {
+        ofstream pipe(pipepath);
+        if (pipe.is_open()) {
+          pipe << buffer;
+          pipe.flush();
+          pipe.close();
+        }
+      } else if (bytes_read < 0) {
+        cout << "Client " << client_socket << " disconnected" << endl;
+        break;
+      }
+    }
+    clients.erase(std::remove(clients.begin(), clients.end(), client_socket),
+                  clients.end());
+  }
+  close(client_socket);
+}
+
 void process_piping() {
   char b;
   while (read(STDIN_FILENO, &b, 1) > 0) {
@@ -118,14 +231,16 @@ int main(int argc, char *argv[]) {
 
   Argparser::Argparser parser(argc, argv);
   parser.setProgramName("Simple RCON");
-  parser.addArgument("--conf", "Configuration file path", false, false,
-                     Argparser::ArgumentType::str);
   parser.addArgument("init", "Creates basic configuration file", false, false,
                      Argparser::ArgumentType::def);
 
+  parser.addArgument("--conf", "Configuration file path", false, false,
+                     Argparser::ArgumentType::str);
+  parser.addArgument("--inpipe", "STDIN Pipe path", false, false,
+                     Argparser::ArgumentType::str);
   parser.parse();
 
-  if (parser.getDefined(1)) {
+  if (parser.getDefined(0)) {
     cout << "Creating configuration file..." << endl;
     ofstream conf("rcon.conf");
     if (!conf.is_open()) {
@@ -138,12 +253,12 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  if (!parser.getDefined(0)) {
+  if (!parser.getDefined(1)) {
     cerr << "Specify configuration path!" << endl;
     return 1;
   }
 
-  string path = parser.getString(0);
+  string path = parser.getString(1);
   ifstream conf(path, std::ifstream::binary);
 
   if (!conf.is_open()) {
@@ -193,11 +308,19 @@ int main(int argc, char *argv[]) {
 
     cout << "[RCON] Got new client at " << client_ip << ":" << client_port
          << " with client FD: " << client_socket << endl;
+    if (is_banned(client_ip)) {
+      std::cout << "[RCON] Banned IP tried to connect: " << client_ip
+                << std::endl;
+      string str = "Your ban expires in " + get_ban_remaining(client_ip);
+      send(client_socket, str.data(), str.size(), 0);
+      close(client_socket);
+      continue;
+    }
 
-    send_in_chunks(client_socket, byte_history.data(), byte_history.size());
-
-    clients.push_back(client_socket);
-    std::thread(handle_client, client_socket).detach();
+    std::thread(handle_client, client_socket,
+                (parser.getDefined(2) ? parser.getString(2) : ""), client_ip,
+                data)
+        .detach();
   }
   if (reader_thread.joinable())
     reader_thread.join();

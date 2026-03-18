@@ -12,6 +12,11 @@ make
 ```bash
 unbuffer -p ./srcds -console | ./simpleRCON --conf rcon.conf
 ```
+If you want to make input, then:
+```bash
+mkfifo rcon_input
+tail -f rcon_input | unbuffer -p ./srcds -console | ./simpleRCON --conf rcon.conf --inpipe rcon_input
+```
 ## Client:
 ```bash
 nc <ip> <port>
@@ -20,6 +25,7 @@ nc <ip> <port>
 # Arguments:
 ```txt
 --conf: Specifies path for configuration file
+--inpipe: Specifies pipe at which server will write his STDIN
 init: Creates basic configuration file
 ```
 
