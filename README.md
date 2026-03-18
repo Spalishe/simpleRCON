@@ -15,8 +15,9 @@ unbuffer -p ./srcds -console | ./simpleRCON --conf rcon.conf
 If you want to make input, then:
 ```bash
 mkfifo rcon_input
-tail -f rcon_input | unbuffer -p ./srcds -console | ./simpleRCON --conf rcon.conf --inpipe rcon_input
+cat > rcon_input | (cat > rcon_input & cat rcon_input) | unbuffer -p ./srcds -console | ./simpleRCON --conf rcon.conf --inpipe rcon_input
 ```
+Note: your input would be doubled
 ## Client:
 ```bash
 nc <ip> <port>
