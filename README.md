@@ -8,8 +8,13 @@ make
 ```
 
 # Using:
+## Server:
 ```bash
-./myserver --someargument | ./simpleRCON --conf rcon.conf
+unbuffer -p ./srcds -console | ./simpleRCON --conf rcon.conf
+```
+## Client:
+```bash
+nc <ip> <port>
 ```
 
 # Arguments:
@@ -20,6 +25,7 @@ init: Creates basic configuration file
 
 # Dependencies:
 - JsonCpp
+- Netcat (on client)
 
 # License:
 This project is licensed under MIT License. See [LICENSE](https://github.com/Spalishe/simpleRCON/blob/main/LICENSE)
